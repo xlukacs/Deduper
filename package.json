@@ -1,0 +1,40 @@
+{
+  "name": "@madrent/deduper",
+  "version": "0.1.0",
+  "description": "Content-based duplicate file finder",
+  "license": "MIT",
+  "author": "Bence Mark Lukacs",
+  "homepage": "https://github.com/xlukacs/Deduper#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/xlukacs/Deduper.git"
+  },
+  "bugs": {
+    "url": "https://github.com/xlukacs/Deduper/issues"
+  },
+  "bin": {
+    "deduper": "npm/bin/deduper.js"
+  },
+  "files": [
+    "npm/bin",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build:npm": "./scripts/build-npm.sh",
+    "build:npm:all": "./scripts/build-npm.sh --all",
+    "test": "go test ./..."
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "keywords": [
+    "duplicate-files",
+    "deduplication",
+    "cli",
+    "sha256"
+  ],
+  "publishConfig": {
+    "access": "public"
+  }
+}
