@@ -11,6 +11,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/xlukacs/Deduper/internal/scan"
+	"github.com/xlukacs/Deduper/internal/settings"
 )
 
 func TestStartRejectsInvalidPath(t *testing.T) {
@@ -21,6 +22,33 @@ func TestStartRejectsInvalidPath(t *testing.T) {
 	got := updated.(Model)
 	if got.screen != screenStart || !strings.Contains(got.status, "cannot access") {
 		t.Fatalf("unexpected state: screen=%v status=%q", got.screen, got.status)
+	}
+}
+
+func TestStartArrowKeysNavigateRecentFolders(t *testing.T) {
+	m := New()
+	m.history = nil
+	m.recent = []string{"/first", "/second"}
+
+	updated, _ := m.updateStart(tea.KeyPressMsg(tea.Key{Code: tea.KeyDown}))
+	m = updated.(Model)
+	if m.focus != focusRecent || m.recentIndex != 0 {
+		t.Fatalf("down from input = focus %v at %d, want first recent folder", m.focus, m.recentIndex)
+	}
+	updated, _ = m.updateStart(tea.KeyPressMsg(tea.Key{Code: tea.KeyDown}))
+	m = updated.(Model)
+	if m.recentIndex != 1 {
+		t.Fatalf("second down selected %d, want 1", m.recentIndex)
+	}
+	updated, _ = m.updateStart(tea.KeyPressMsg(tea.Key{Code: tea.KeyUp}))
+	m = updated.(Model)
+	if m.recentIndex != 0 || m.focus != focusRecent {
+		t.Fatalf("up from second selected focus %v at %d, want first recent", m.focus, m.recentIndex)
+	}
+	updated, _ = m.updateStart(tea.KeyPressMsg(tea.Key{Code: tea.KeyUp}))
+	m = updated.(Model)
+	if m.focus != focusInput {
+		t.Fatalf("up from first recent has focus %v, want input", m.focus)
 	}
 }
 
@@ -133,6 +161,56 @@ func TestWarningViewAndWindowResize(t *testing.T) {
 	m = updated.(Model)
 	if m.width != 120 || !strings.Contains(m.View().Content, "bad: denied") {
 		t.Fatalf("resize/warning rendering failed: %s", m.View().Content)
+	}
+}
+
+func TestSettingsAreEditedAndPersistedFromTUI(t *testing.T) {
+	m := New()
+	m.history = nil
+	m.settingsStore = settings.NewAt(t.TempDir() + "/settings.json")
+	m.settings = settings.Config{}
+	m.screen = screenStart
+
+	updated, _ := m.updateStart(tea.KeyPressMsg(tea.Key{Code: 'o'}))
+	m = updated.(Model)
+	if m.screen != screenSettings || !strings.Contains(m.View().Content, "Ignore hidden folders") {
+		t.Fatalf("settings screen did not open: %s", m.View().Content)
+	}
+
+	updated, _ = m.updateSettings(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	m = updated.(Model)
+	if !m.settings.IgnoreHiddenFolders {
+		t.Fatal("hidden-folder setting was not toggled")
+	}
+
+	m.settingsIndex = settingWorkers
+	updated, _ = m.updateSettings(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	m = updated.(Model)
+	m.settingInput.SetValue("6")
+	updated, _ = m.updateSettings(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	m = updated.(Model)
+	if m.settings.Workers != 6 {
+		t.Fatalf("Workers = %d, want 6", m.settings.Workers)
+	}
+
+	m.settingsIndex = settingAddExcluded
+	updated, _ = m.updateSettings(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	m = updated.(Model)
+	m.settingInput.SetValue("build/output")
+	updated, _ = m.updateSettings(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	m = updated.(Model)
+	if got := m.settings.ExcludedFolders; len(got) != 1 || got[0] != "build/output" {
+		t.Fatalf("ExcludedFolders = %v", got)
+	}
+
+	m.settingsIndex = settingFirstExcluded
+	updated, _ = m.updateSettings(tea.KeyPressMsg(tea.Key{Code: 'd'}))
+	m = updated.(Model)
+	if len(m.settings.ExcludedFolders) != 0 {
+		t.Fatalf("excluded folder was not removed: %v", m.settings.ExcludedFolders)
+	}
+	if options := m.scanOptions(); !options.IgnoreHiddenFolders || options.Workers != 6 {
+		t.Fatalf("scan options were not derived from settings: %+v", options)
 	}
 }
 

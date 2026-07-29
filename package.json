@@ -1,6 +1,6 @@
 {
   "name": "@madrent/deduper",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Content-based duplicate file finder",
   "license": "MIT",
   "author": "Bence Mark Lukacs",

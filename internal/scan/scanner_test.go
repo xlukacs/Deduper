@@ -85,6 +85,47 @@ func TestScanIgnoresVenvAndNodeModules(t *testing.T) {
 	}
 }
 
+func TestScanIgnoresConfiguredAndHiddenFolders(t *testing.T) {
+	root := t.TempDir()
+	writeTestFile(t, root, "keep-a", "same")
+	writeTestFile(t, root, "keep-b", "same")
+	writeTestFile(t, root, filepath.Join(".git", "objects", "ignored"), "same")
+	writeTestFile(t, root, filepath.Join(".turbo", "cache", "ignored"), "same")
+	writeTestFile(t, root, filepath.Join("generated", "ignored"), "same")
+	writeTestFile(t, root, filepath.Join("nested", "archive", "ignored"), "same")
+	writeTestFile(t, root, filepath.Join("nested", "keep", "included"), "same")
+	result, err := ScanWithOptions(context.Background(), root, nil, Options{
+		Workers:             3,
+		IgnoreHiddenFolders: true,
+		ExcludedFolders:     []string{"generated", "nested/archive"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Stats.FilesDiscovered != 3 || result.Stats.FilesHashed != 3 {
+		t.Fatalf("configured exclusions were not applied: stats=%+v", result.Stats)
+	}
+	if len(result.Groups) != 1 || len(result.Groups[0].Files) != 3 {
+		t.Fatalf("unexpected duplicate groups: %+v", result.Groups)
+	}
+	for _, file := range result.Groups[0].Files {
+		if strings.Contains(file.Path, ".git") || strings.Contains(file.Path, ".turbo") || strings.Contains(file.Path, "generated") || strings.Contains(file.Path, "nested/archive") {
+			t.Fatalf("excluded file was included: %s", file.Path)
+		}
+	}
+}
+
+func TestDefaultOptionsUseConfiguredWorkers(t *testing.T) {
+	t.Setenv("DEDUPER_WORKERS", "7")
+	if options := DefaultOptions(); options.Workers != 7 {
+		t.Fatalf("Workers = %d, want 7", options.Workers)
+	}
+	t.Setenv("DEDUPER_WORKERS", "not-a-number")
+	if options := DefaultOptions(); options.Workers < 1 {
+		t.Fatalf("Workers = %d, want a positive default", options.Workers)
+	}
+}
+
 func TestScanDoesNotHashUniqueSizedFiles(t *testing.T) {
 	root := t.TempDir()
 	writeTestFile(t, root, "keep-a", "same")

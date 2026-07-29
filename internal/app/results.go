@@ -50,6 +50,8 @@ func (m Model) updateResults(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case keyWarnings:
 			m.showWarnings = !m.showWarnings
 			return m, nil
+		case keyOptions:
+			return m.openSettings(screenResults)
 		case keySort:
 			m.groupSort = (m.groupSort + 1) % sortCount
 			m.sortGroups()
@@ -209,7 +211,7 @@ func (m Model) viewResults() string {
 	if m.filtering || m.filterInput.Value() != "" {
 		body = m.filterInput.View() + "\n\n" + body
 	}
-	help := "↑/↓ or j/k navigate  •  tab switch pane  •  / filter  •  s sort  •  r rescan  •  n new  •  w warnings  •  q quit"
+	help := "↑/↓ or j/k navigate  •  tab switch pane  •  / filter  •  s sort  •  o settings  •  r rescan  •  n new  •  w warnings  •  q quit"
 	return m.chrome(summary+"\n\n"+body, help)
 }
 

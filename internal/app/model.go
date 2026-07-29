@@ -13,6 +13,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"github.com/xlukacs/Deduper/internal/history"
 	"github.com/xlukacs/Deduper/internal/scan"
+	"github.com/xlukacs/Deduper/internal/settings"
 )
 
 type screen int
@@ -21,6 +22,7 @@ const (
 	screenStart screen = iota
 	screenScanning
 	screenResults
+	screenSettings
 )
 
 type focus int
@@ -50,13 +52,19 @@ type Model struct {
 	width  int
 	height int
 
-	pathInput   textinput.Model
-	filterInput textinput.Model
-	filtering   bool
-	recent      []string
-	recentIndex int
-	history     *history.Store
-	status      string
+	pathInput       textinput.Model
+	filterInput     textinput.Model
+	settingInput    textinput.Model
+	filtering       bool
+	recent          []string
+	recentIndex     int
+	history         *history.Store
+	settings        settings.Config
+	settingsStore   *settings.Store
+	settingsIndex   int
+	editingSettings bool
+	settingsReturn  screen
+	status          string
 
 	spinner      spinner.Model
 	progress     progress.Model
@@ -93,26 +101,47 @@ func New() Model {
 	filterInput.CharLimit = 512
 	filterInput.SetVirtualCursor(true)
 
+	settingInput := textinput.New()
+	settingInput.CharLimit = 512
+	settingInput.SetVirtualCursor(true)
+
 	model := Model{
-		screen:      screenStart,
-		focus:       focusInput,
-		pathInput:   pathInput,
-		filterInput: filterInput,
-		spinner:     spinner.New(spinner.WithSpinner(spinner.Dot)),
-		progress:    progress.New(progress.WithDefaultBlend()),
-		styles:      newStyles(),
+		screen:       screenStart,
+		focus:        focusInput,
+		pathInput:    pathInput,
+		filterInput:  filterInput,
+		settingInput: settingInput,
+		spinner:      spinner.New(spinner.WithSpinner(spinner.Dot)),
+		progress:     progress.New(progress.WithDefaultBlend()),
+		styles:       newStyles(),
 	}
 	store, err := history.New()
 	if err != nil {
 		model.status = "History unavailable: " + err.Error()
-		return model
-	}
-	model.history = store
-	paths, err := store.Load()
-	if err != nil {
-		model.status = "History ignored: " + err.Error()
 	} else {
-		model.recent = paths
+		model.history = store
+		paths, loadErr := store.Load()
+		if loadErr != nil {
+			model.status = "History ignored: " + loadErr.Error()
+		} else {
+			model.recent = paths
+		}
+	}
+	settingsStore, err := settings.New()
+	if err != nil {
+		if model.status == "" {
+			model.status = "Settings unavailable: " + err.Error()
+		}
+	} else {
+		model.settingsStore = settingsStore
+		config, loadErr := settingsStore.Load()
+		if loadErr != nil {
+			if model.status == "" {
+				model.status = "Settings ignored: " + loadErr.Error()
+			}
+		} else {
+			model.settings = config
+		}
 	}
 	return model
 }
@@ -143,6 +172,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.updateScanning(msg)
 	case screenResults:
 		return m.updateResults(msg)
+	case screenSettings:
+		return m.updateSettings(msg)
 	default:
 		return m, nil
 	}
@@ -157,6 +188,8 @@ func (m Model) View() tea.View {
 		content = m.viewScanning()
 	case screenResults:
 		content = m.viewResults()
+	case screenSettings:
+		content = m.viewSettings()
 	}
 	view := tea.NewView(content)
 	view.AltScreen = true

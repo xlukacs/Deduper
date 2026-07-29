@@ -5,7 +5,7 @@ umask 022
 script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 project_root="$(cd -- "${script_dir}/.." && pwd)"
 go_bin="${GO_BIN:-}"
-version="${VERSION:-0.1.0}"
+version="${VERSION:-0.2.0}"
 
 if [[ -z "${go_bin}" ]]; then
 	if command -v go >/dev/null 2>&1; then

@@ -15,7 +15,7 @@ func TestHelpVersionAndUsage(t *testing.T) {
 		contains string
 	}{
 		{[]string{"help"}, 0, "Usage:"},
-		{[]string{"version"}, 0, "deduper 0.1.0"},
+		{[]string{"version"}, 0, "deduper 0.2.0"},
 		{[]string{"unknown"}, 2, "unknown command"},
 		{[]string{"scan"}, 2, "requires exactly one"},
 	} {

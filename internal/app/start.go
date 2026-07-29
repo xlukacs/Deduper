@@ -29,12 +29,21 @@ func (m Model) updateStart(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return m.beginScan(path)
 		case keyMoveUp, keyMoveUpAlt:
-			if m.focus == focusRecent && m.recentIndex > 0 {
-				m.recentIndex--
+			if m.focus == focusRecent {
+				if m.recentIndex > 0 {
+					m.recentIndex--
+				} else {
+					m.focus = focusInput
+					return m, m.pathInput.Focus()
+				}
 			}
 			return m, nil
 		case keyMoveDown, keyMoveDownAlt:
-			if m.focus == focusRecent && m.recentIndex+1 < len(m.recent) {
+			if len(m.recent) > 0 && m.focus == focusInput {
+				m.focus = focusRecent
+				m.recentIndex = 0
+				m.pathInput.Blur()
+			} else if m.focus == focusRecent && m.recentIndex+1 < len(m.recent) {
 				m.recentIndex++
 			}
 			return m, nil
@@ -42,6 +51,8 @@ func (m Model) updateStart(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.focus == focusRecent {
 				return m, tea.Quit
 			}
+		case keyOptions:
+			return m.openSettings(screenStart)
 		}
 	}
 	if m.focus == focusInput {
@@ -110,5 +121,5 @@ func (m Model) viewStart() string {
 		}
 	}
 	body += m.errorLine()
-	return m.chrome(body, "enter scan  •  tab switch focus  •  ↑/↓ choose recent  •  ctrl+c quit")
+	return m.chrome(body, "enter scan  •  tab switch focus  •  ↑/↓ choose recent  •  o settings  •  ctrl+c quit")
 }

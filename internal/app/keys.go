@@ -10,6 +10,7 @@ const (
 	keyNewScan     = "n"
 	keyWarnings    = "w"
 	keySort        = "s"
+	keyOptions     = "o"
 	keyMoveUp      = "up"
 	keyMoveDown    = "down"
 	keyMoveUpAlt   = "k"

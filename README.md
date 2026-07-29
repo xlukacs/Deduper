@@ -18,7 +18,7 @@ Build an Ubuntu/Debian package for the current machine:
 
 ```sh
 ./scripts/build-deb.sh
-sudo apt install ./dist/deduper_0.1.0_amd64.deb
+sudo apt install ./dist/deduper_0.2.0_amd64.deb
 ```
 
 The package installs the `deduper` command in `/usr/bin`. Go is only required
@@ -61,6 +61,22 @@ Directories named `venv` or `node_modules` are ignored. Deduper also avoids
 hashing files whose byte size is unique within the scan, because they cannot be
 content duplicates. This keeps exact duplicate detection while avoiding needless
 reads of large unique files on remote or slow storage.
+
+### Excluding folders
+
+Press `o` in the interactive application to open scan settings. There you can
+toggle hidden-folder exclusions (such as `.git`, `.turbo`, and `.ssh`) and add
+or remove folder exclusions. A bare folder name applies anywhere below the scan
+root; a path with `/` applies relative to the scan root. Settings are saved for
+future interactive and plain-text scans. `node_modules` and `venv` remain
+excluded by default.
+
+### Hash workers
+
+Hashing runs concurrently, using the number of CPUs configured for Go by
+default. Press `o` in the interactive application to choose the number of
+files hashed at once. For a one-off non-interactive scan, `DEDUPER_WORKERS`
+remains available as an environment override.
 
 ## Interactive keys
 

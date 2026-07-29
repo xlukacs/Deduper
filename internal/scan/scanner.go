@@ -8,6 +8,10 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
+	"strconv"
+	"strings"
+	"sync"
 	"time"
 )
 
@@ -16,13 +20,43 @@ type discoveredFile struct {
 	size int64
 }
 
-var ignoredDirNames = map[string]struct{}{
-	"node_modules": {},
-	"venv":         {},
+var defaultIgnoredDirNames = []string{"node_modules", "venv"}
+
+// Options controls a scan's resource usage.
+type Options struct {
+	// Workers is the number of files hashed concurrently. A value of zero uses
+	// DefaultOptions.
+	Workers int
+	// IgnoreHiddenFolders skips all folders whose names start with a dot.
+	IgnoreHiddenFolders bool
+	// ExcludedFolders contains either folder names (matched anywhere) or paths
+	// relative to the scan root.
+	ExcludedFolders []string
+}
+
+// DefaultOptions returns the options used by Scan. Set DEDUPER_WORKERS to a
+// positive integer to override the default CPU-sized hash worker pool.
+func DefaultOptions() Options {
+	workers := runtime.GOMAXPROCS(0)
+	if configured, ok := EnvironmentWorkers(); ok {
+		workers = configured
+	}
+	return Options{Workers: workers}
+}
+
+// EnvironmentWorkers returns the positive DEDUPER_WORKERS value, if set.
+func EnvironmentWorkers() (int, bool) {
+	configured, err := strconv.Atoi(strings.TrimSpace(os.Getenv("DEDUPER_WORKERS")))
+	return configured, err == nil && configured > 0
 }
 
 // Scan discovers and hashes all regular files below root.
 func Scan(ctx context.Context, root string, observer Observer) (Result, error) {
+	return ScanWithOptions(ctx, root, observer, DefaultOptions())
+}
+
+// ScanWithOptions discovers and hashes all regular files below root.
+func ScanWithOptions(ctx context.Context, root string, observer Observer, options Options) (Result, error) {
 	started := time.Now()
 	result := Result{StartedAt: started}
 	if observer == nil {
@@ -34,6 +68,10 @@ func Scan(ctx context.Context, root string, observer Observer) (Result, error) {
 		return result, err
 	}
 	result.Root = absRoot
+	workers := options.Workers
+	if workers <= 0 {
+		workers = DefaultOptions().Workers
+	}
 
 	warn := func(path string, err error) {
 		warning := Warning{Path: path, Err: err}
@@ -41,6 +79,7 @@ func Scan(ctx context.Context, root string, observer Observer) (Result, error) {
 		result.Stats.Errors++
 		observer.OnWarning(warning)
 	}
+	ignored := newIgnoreRules(options)
 
 	var discovered []discoveredFile
 	err = filepath.WalkDir(absRoot, func(path string, entry os.DirEntry, walkErr error) error {
@@ -58,10 +97,15 @@ func Scan(ctx context.Context, root string, observer Observer) (Result, error) {
 			}
 			return nil
 		}
-		if entry.IsDir() && path != absRoot && isIgnoredDir(entry.Name()) {
-			return filepath.SkipDir
+		if entry.IsDir() && path != absRoot {
+			relative, relErr := filepath.Rel(absRoot, path)
+			if relErr != nil {
+				return relErr
+			}
+			if ignored.matches(relative, entry.Name()) {
+				return filepath.SkipDir
+			}
 		}
-
 		observer.OnProgress(Progress{
 			Phase:          PhaseDiscovering,
 			CurrentPath:    path,
@@ -109,43 +153,80 @@ func Scan(ctx context.Context, root string, observer Observer) (Result, error) {
 
 	files := make([]FileRecord, 0, len(candidates))
 	var completedBytes int64
-	for _, item := range candidates {
-		if err := ctx.Err(); err != nil {
-			return Result{}, err
-		}
-
-		progress := Progress{
+	progress := func(path string) Progress {
+		return Progress{
 			Phase:          PhaseHashing,
-			CurrentPath:    item.path,
+			CurrentPath:    path,
 			FilesCompleted: result.Stats.FilesHashed,
 			FilesTotal:     int64(len(candidates)),
 			BytesCompleted: completedBytes,
 			BytesTotal:     bytesToHash,
 		}
-		observer.OnProgress(progress)
+	}
+	observer.OnProgress(progress(absRoot))
 
-		record, bytesRead, hashErr := hashFile(ctx, item.path, progress, observer)
-		if hashErr != nil {
-			if errors.Is(hashErr, context.Canceled) || errors.Is(hashErr, context.DeadlineExceeded) {
-				return Result{}, hashErr
+	events := make(chan hashEvent, workers*2)
+	jobs := make(chan discoveredFile)
+	var workerGroup sync.WaitGroup
+	for range workers {
+		workerGroup.Add(1)
+		go func() {
+			defer workerGroup.Done()
+			for item := range jobs {
+				if ctx.Err() != nil {
+					return
+				}
+				record, _, hashErr := hashFile(ctx, item.path, func(bytesRead int64) error {
+					select {
+					case events <- hashEvent{path: item.path, bytesRead: bytesRead}:
+						return nil
+					case <-ctx.Done():
+						return ctx.Err()
+					}
+				})
+				select {
+				case events <- hashEvent{path: item.path, record: record, err: hashErr, done: true}:
+				case <-ctx.Done():
+					return
+				}
 			}
-			warn(item.path, hashErr)
-			result.Stats.FilesSkipped++
-			completedBytes += bytesRead
+		}()
+	}
+	go func() {
+		defer close(jobs)
+		for _, item := range candidates {
+			select {
+			case jobs <- item:
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
+	go func() {
+		workerGroup.Wait()
+		close(events)
+	}()
+
+	for event := range events {
+		if !event.done {
+			completedBytes += event.bytesRead
+			observer.OnProgress(progress(event.path))
 			continue
 		}
-		files = append(files, record)
+		if event.err != nil {
+			if !errors.Is(event.err, context.Canceled) && !errors.Is(event.err, context.DeadlineExceeded) {
+				warn(event.path, event.err)
+				result.Stats.FilesSkipped++
+			}
+			continue
+		}
+		files = append(files, event.record)
 		result.Stats.FilesHashed++
-		result.Stats.BytesHashed += record.Size
-		completedBytes += record.Size
-		observer.OnProgress(Progress{
-			Phase:          PhaseHashing,
-			CurrentPath:    item.path,
-			FilesCompleted: result.Stats.FilesHashed,
-			FilesTotal:     int64(len(candidates)),
-			BytesCompleted: completedBytes,
-			BytesTotal:     bytesToHash,
-		})
+		result.Stats.BytesHashed += event.record.Size
+		observer.OnProgress(progress(event.path))
+	}
+	if err := ctx.Err(); err != nil {
+		return Result{}, err
 	}
 
 	result.Groups = FindDuplicates(files)
@@ -168,9 +249,56 @@ func duplicateSizeCandidates(discovered []discoveredFile) []discoveredFile {
 	return candidates
 }
 
-func isIgnoredDir(name string) bool {
-	_, ignored := ignoredDirNames[name]
+type ignoreRules struct {
+	names              map[string]struct{}
+	paths              map[string]struct{}
+	ignoreHiddenFolder bool
+}
+
+func newIgnoreRules(options Options) ignoreRules {
+	rules := ignoreRules{
+		names:              make(map[string]struct{}, len(defaultIgnoredDirNames)),
+		paths:              make(map[string]struct{}),
+		ignoreHiddenFolder: options.IgnoreHiddenFolders,
+	}
+	for _, name := range defaultIgnoredDirNames {
+		rules.names[name] = struct{}{}
+	}
+	for _, rawEntry := range options.ExcludedFolders {
+		entry := strings.TrimSpace(rawEntry)
+		if entry == "" {
+			continue
+		}
+		entry = filepath.Clean(filepath.FromSlash(strings.ReplaceAll(entry, "\\", "/")))
+		if entry == "." || entry == ".." || filepath.IsAbs(entry) || strings.HasPrefix(entry, ".."+string(filepath.Separator)) {
+			continue
+		}
+		if strings.Contains(entry, string(filepath.Separator)) {
+			rules.paths[entry] = struct{}{}
+		} else {
+			rules.names[entry] = struct{}{}
+		}
+	}
+	return rules
+}
+
+func (rules ignoreRules) matches(relative, name string) bool {
+	if rules.ignoreHiddenFolder && strings.HasPrefix(name, ".") {
+		return true
+	}
+	if _, ignored := rules.names[name]; ignored {
+		return true
+	}
+	_, ignored := rules.paths[filepath.Clean(relative)]
 	return ignored
+}
+
+type hashEvent struct {
+	path      string
+	bytesRead int64
+	record    FileRecord
+	err       error
+	done      bool
 }
 
 func validateRoot(root string) (string, error) {
@@ -194,7 +322,7 @@ func validateRoot(root string) (string, error) {
 	return filepath.Clean(abs), nil
 }
 
-func hashFile(ctx context.Context, path string, base Progress, observer Observer) (FileRecord, int64, error) {
+func hashFile(ctx context.Context, path string, onRead func(int64) error) (FileRecord, int64, error) {
 	before, err := os.Lstat(path)
 	if err != nil {
 		return FileRecord{}, 0, err
@@ -222,9 +350,9 @@ func hashFile(ctx context.Context, path string, base Progress, observer Observer
 				return FileRecord{}, read, err
 			}
 			read += int64(n)
-			update := base
-			update.BytesCompleted += read
-			observer.OnProgress(update)
+			if err := onRead(int64(n)); err != nil {
+				return FileRecord{}, read, err
+			}
 		}
 		if errors.Is(readErr, io.EOF) {
 			break

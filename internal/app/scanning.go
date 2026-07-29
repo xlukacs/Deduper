@@ -63,7 +63,7 @@ func (m Model) launchScan(root string) (tea.Model, tea.Cmd) {
 	m.showWarnings = false
 
 	go func() {
-		result, err := scan.Scan(ctx, root, channelObserver{id: id, events: events})
+		result, err := scan.ScanWithOptions(ctx, root, channelObserver{id: id, events: events}, m.scanOptions())
 		select {
 		case events <- scanFinishedMsg{id: id, result: result, err: err}:
 		case <-ctx.Done():

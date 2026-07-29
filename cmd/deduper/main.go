@@ -12,10 +12,11 @@ import (
 	"github.com/xlukacs/Deduper/internal/app"
 	"github.com/xlukacs/Deduper/internal/report"
 	"github.com/xlukacs/Deduper/internal/scan"
+	"github.com/xlukacs/Deduper/internal/settings"
 )
 
 // version can be replaced by release builds with -X main.version.
-var version = "0.1.0"
+var version = "0.2.0"
 
 func main() {
 	os.Exit(run(os.Args[1:], os.Stdout, os.Stderr))
@@ -56,7 +57,11 @@ func run(args []string, stdout, stderr io.Writer) int {
 func runScan(root string, stdout, stderr io.Writer) int {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
-	result, err := scan.Scan(ctx, root, stderrObserver{writer: stderr})
+	options, optionsErr := loadScanOptions()
+	if optionsErr != nil {
+		fmt.Fprintln(stderr, "warning: settings ignored:", optionsErr)
+	}
+	result, err := scan.ScanWithOptions(ctx, root, stderrObserver{writer: stderr}, options)
 	if err != nil {
 		if errors.Is(err, context.Canceled) {
 			fmt.Fprintln(stderr, "deduper: interrupted")
@@ -70,6 +75,27 @@ func runScan(root string, stdout, stderr io.Writer) int {
 		return 1
 	}
 	return 0
+}
+
+func loadScanOptions() (scan.Options, error) {
+	options := scan.DefaultOptions()
+	store, err := settings.New()
+	if err != nil {
+		return options, err
+	}
+	config, err := store.Load()
+	if err != nil {
+		return options, err
+	}
+	if config.Workers > 0 {
+		options.Workers = config.Workers
+	}
+	if workers, configured := scan.EnvironmentWorkers(); configured {
+		options.Workers = workers
+	}
+	options.IgnoreHiddenFolders = config.IgnoreHiddenFolders
+	options.ExcludedFolders = append([]string(nil), config.ExcludedFolders...)
+	return options, nil
 }
 
 type stderrObserver struct{ writer io.Writer }
