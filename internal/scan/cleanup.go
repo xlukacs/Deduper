@@ -9,12 +9,16 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/xlukacs/Deduper/internal/settings"
 )
 
 // FindCleanupFolders recursively finds directories whose exact names are in
 // names. It records and prunes a matching directory without walking its
-// contents.
-func FindCleanupFolders(ctx context.Context, root string, names []string, observer Observer) (CleanupResult, error) {
+// contents. Folders excluded in options are never searched or matched. Hidden
+// folders are matched by exact name but, when options ignores them, are not
+// searched.
+func FindCleanupFolders(ctx context.Context, root string, names []string, options Options, observer Observer) (CleanupResult, error) {
 	started := time.Now()
 	result := CleanupResult{StartedAt: started}
 	if observer == nil {
@@ -29,7 +33,7 @@ func FindCleanupFolders(ctx context.Context, root string, names []string, observ
 	matchingNames := make(map[string]struct{}, len(names))
 	for _, name := range names {
 		name = strings.TrimSpace(name)
-		if name == "" || name == "." || name == ".." || strings.ContainsAny(name, `/\\`) {
+		if !settings.ValidCleanupName(name) {
 			continue
 		}
 		matchingNames[name] = struct{}{}
@@ -48,6 +52,7 @@ func FindCleanupFolders(ctx context.Context, root string, names []string, observ
 		result.Warnings = append(result.Warnings, warning)
 		observer.OnWarning(warning)
 	}
+	ignored := newExclusionRules(options, nil)
 	var visited, matchesFound int64
 	err = filepath.WalkDir(absRoot, func(path string, entry os.DirEntry, walkErr error) error {
 		if err := ctx.Err(); err != nil {
@@ -68,6 +73,13 @@ func FindCleanupFolders(ctx context.Context, root string, names []string, observ
 		if !entry.IsDir() || path == absRoot {
 			return nil
 		}
+		relative, relErr := filepath.Rel(absRoot, path)
+		if relErr != nil {
+			return relErr
+		}
+		if ignored.excluded(relative, entry.Name()) {
+			return filepath.SkipDir
+		}
 
 		visited++
 		_, matches := matchingNames[entry.Name()]
@@ -81,7 +93,7 @@ func FindCleanupFolders(ctx context.Context, root string, names []string, observ
 			DirectoriesVisited: visited,
 			MatchesFound:       matchesFound,
 		})
-		if matches {
+		if matches || ignored.hidden(entry.Name()) {
 			return filepath.SkipDir
 		}
 		return nil
@@ -99,7 +111,8 @@ func FindCleanupFolders(ctx context.Context, root string, names []string, observ
 
 // DeleteCleanupFolders removes the selected folders beneath root and reports
 // each entry removed. Paths are checked for containment and operated on through
-// os.Root so symlinks cannot make a target escape the selected root.
+// os.Root so symlinks cannot make a target escape the selected root. Folders
+// that are not in the returned removed list could not be fully deleted.
 func DeleteCleanupFolders(ctx context.Context, root string, folders []CleanupFolder, onProgress func(CleanupDeleteProgress)) ([]string, []Warning, error) {
 	absRoot, err := validateRoot(root)
 	if err != nil {
@@ -115,7 +128,6 @@ func DeleteCleanupFolders(ctx context.Context, root string, folders []CleanupFol
 	warnings := make([]Warning, 0)
 	ordered := append([]CleanupFolder(nil), folders...)
 	sort.Slice(ordered, func(i, j int) bool { return ordered[i].Path < ordered[j].Path })
-	removedRelative := make([]string, 0, len(ordered))
 	progress := CleanupDeleteProgress{FoldersTotal: len(ordered)}
 	emitProgress := func() {
 		if onProgress != nil {
@@ -128,116 +140,79 @@ func DeleteCleanupFolders(ctx context.Context, root string, folders []CleanupFol
 		}
 		progress.CurrentPath = folder.Path
 		emitProgress()
-		cleanPath := filepath.Clean(folder.Path)
-		relative, err := filepath.Rel(absRoot, cleanPath)
-		if err != nil || relative == "." || filepath.IsAbs(relative) || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
-			if err == nil {
-				err = errors.New("cleanup folder is outside the selected root")
-			}
-			warnings = append(warnings, Warning{Path: folder.Path, Err: err})
-			progress.FoldersCompleted++
-			emitProgress()
-			continue
-		}
-		insideRemovedFolder := false
-		for _, parent := range removedRelative {
-			if strings.HasPrefix(relative, parent+string(filepath.Separator)) {
-				insideRemovedFolder = true
-				break
-			}
-		}
-		if insideRemovedFolder {
-			removed = append(removed, folder.Path)
-			progress.FoldersCompleted++
-			emitProgress()
-			continue
-		}
-		if folder.Name != filepath.Base(relative) {
-			warnings = append(warnings, Warning{Path: folder.Path, Err: errors.New("cleanup folder name does not match its path")})
-			progress.FoldersCompleted++
-			emitProgress()
-			continue
-		}
-		components := strings.Split(relative, string(filepath.Separator))
-		parent := ""
-		parentInvalid := false
-		for _, component := range components[:len(components)-1] {
-			if parent == "" {
-				parent = component
-			} else {
-				parent = filepath.Join(parent, component)
-			}
-			parentInfo, parentErr := rootHandle.Lstat(parent)
-			if parentErr != nil {
-				warnings = append(warnings, Warning{Path: folder.Path, Err: parentErr})
-				parentInvalid = true
-				break
-			}
-			if !parentInfo.IsDir() || parentInfo.Mode()&os.ModeSymlink != 0 {
-				warnings = append(warnings, Warning{Path: folder.Path, Err: errors.New("cleanup path contains a non-directory or symbolic-link parent")})
-				parentInvalid = true
-				break
-			}
-		}
-		if parentInvalid {
-			progress.FoldersCompleted++
-			emitProgress()
-			continue
-		}
-
-		info, err := rootHandle.Lstat(relative)
+		ok, err := deleteCleanupFolder(ctx, rootHandle, absRoot, folder, &progress, emitProgress, &warnings)
 		if err != nil {
-			warnings = append(warnings, Warning{Path: folder.Path, Err: err})
-			progress.FoldersCompleted++
-			emitProgress()
-			continue
-		}
-		if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
-			warnings = append(warnings, Warning{Path: folder.Path, Err: errors.New("cleanup target is no longer a directory")})
-			progress.FoldersCompleted++
-			emitProgress()
-			continue
-		}
-		targetRoot, err := rootHandle.OpenRoot(relative)
-		if err != nil {
-			warnings = append(warnings, Warning{Path: folder.Path, Err: err})
-			progress.FoldersCompleted++
-			emitProgress()
-			continue
-		}
-		if err := removeCleanupTree(ctx, targetRoot, folder.Path, &progress, emitProgress, &warnings); err != nil {
-			targetRoot.Close()
 			return removed, warnings, err
 		}
-		if err := targetRoot.Close(); err != nil {
-			warnings = append(warnings, Warning{Path: folder.Path, Err: err})
+		if ok {
+			removed = append(removed, folder.Path)
 		}
-		finalInfo, err := rootHandle.Lstat(relative)
-		if err != nil {
-			warnings = append(warnings, Warning{Path: folder.Path, Err: err})
-			progress.FoldersCompleted++
-			emitProgress()
-			continue
-		}
-		if !finalInfo.IsDir() || finalInfo.Mode()&os.ModeSymlink != 0 || !os.SameFile(info, finalInfo) {
-			warnings = append(warnings, Warning{Path: folder.Path, Err: errors.New("cleanup target changed during deletion")})
-			progress.FoldersCompleted++
-			emitProgress()
-			continue
-		}
-		if err := rootHandle.Remove(relative); err != nil {
-			warnings = append(warnings, Warning{Path: folder.Path, Err: err})
-			progress.FoldersCompleted++
-			emitProgress()
-			continue
-		}
-		progress.EntriesRemoved++
-		removed = append(removed, folder.Path)
-		removedRelative = append(removedRelative, relative)
 		progress.FoldersCompleted++
 		emitProgress()
 	}
 	return removed, warnings, nil
+}
+
+// deleteCleanupFolder removes one matched folder. It records recoverable
+// problems as warnings and returns an error only when ctx is cancelled.
+func deleteCleanupFolder(ctx context.Context, rootHandle *os.Root, absRoot string, folder CleanupFolder, progress *CleanupDeleteProgress, emitProgress func(), warnings *[]Warning) (bool, error) {
+	fail := func(err error) (bool, error) {
+		*warnings = append(*warnings, Warning{Path: folder.Path, Err: err})
+		return false, nil
+	}
+	relative, err := filepath.Rel(absRoot, filepath.Clean(folder.Path))
+	if err != nil {
+		return fail(err)
+	}
+	if relative == "." || filepath.IsAbs(relative) || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
+		return fail(errors.New("cleanup folder is outside the selected root"))
+	}
+	if folder.Name != filepath.Base(relative) {
+		return fail(errors.New("cleanup folder name does not match its path"))
+	}
+	if parent := filepath.Dir(relative); parent != "." {
+		components := strings.Split(parent, string(filepath.Separator))
+		for i := range components {
+			parentInfo, err := rootHandle.Lstat(filepath.Join(components[:i+1]...))
+			if err != nil {
+				return fail(err)
+			}
+			if !parentInfo.IsDir() || parentInfo.Mode()&os.ModeSymlink != 0 {
+				return fail(errors.New("cleanup path contains a non-directory or symbolic-link parent"))
+			}
+		}
+	}
+
+	info, err := rootHandle.Lstat(relative)
+	if err != nil {
+		return fail(err)
+	}
+	if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+		return fail(errors.New("cleanup target is no longer a directory"))
+	}
+	targetRoot, err := rootHandle.OpenRoot(relative)
+	if err != nil {
+		return fail(err)
+	}
+	if err := removeCleanupTree(ctx, targetRoot, folder.Path, progress, emitProgress, warnings); err != nil {
+		targetRoot.Close()
+		return false, err
+	}
+	if err := targetRoot.Close(); err != nil {
+		*warnings = append(*warnings, Warning{Path: folder.Path, Err: err})
+	}
+	finalInfo, err := rootHandle.Lstat(relative)
+	if err != nil {
+		return fail(err)
+	}
+	if !finalInfo.IsDir() || finalInfo.Mode()&os.ModeSymlink != 0 || !os.SameFile(info, finalInfo) {
+		return fail(errors.New("cleanup target changed during deletion"))
+	}
+	if err := rootHandle.Remove(relative); err != nil {
+		return fail(err)
+	}
+	progress.EntriesRemoved++
+	return true, nil
 }
 
 func removeCleanupTree(ctx context.Context, dir *os.Root, path string, progress *CleanupDeleteProgress, emitProgress func(), warnings *[]Warning) error {

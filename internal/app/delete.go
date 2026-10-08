@@ -79,9 +79,14 @@ func (m Model) markedPaths() []string {
 	return paths
 }
 
+// deleteReviewVisible is the number of flagged paths the review screen shows.
+func (m Model) deleteReviewVisible() int {
+	return max(2, m.height-13)
+}
+
 func (m Model) viewDeleteReview() string {
 	paths := m.markedPaths()
-	visible := max(2, m.height-13)
+	visible := m.deleteReviewVisible()
 	start := min(m.deleteReviewOffset, max(0, len(paths)-visible))
 	end := min(len(paths), start+visible)
 	body := fmt.Sprintf("Permanently delete %d flagged files (%s)?\n\n", len(paths), report.Bytes(m.markedBytes()))
@@ -121,7 +126,7 @@ func (m Model) updateDeleteReview(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case keyMoveUp, keyMoveUpAlt:
 			m.deleteReviewOffset = max(0, m.deleteReviewOffset-1)
 		case keyMoveDown, keyMoveDownAlt:
-			m.deleteReviewOffset = min(max(0, len(m.deleteMarked)-max(2, m.height-13)), m.deleteReviewOffset+1)
+			m.deleteReviewOffset = min(max(0, len(m.deleteMarked)-m.deleteReviewVisible()), m.deleteReviewOffset+1)
 		}
 	}
 	return m, nil
@@ -180,9 +185,8 @@ func (m Model) updateDuplicateDeletion(msg duplicatesDeletedMsg) (tea.Model, tea
 		}
 	}
 	m.result.Groups = groups
-	m.result.Warnings = append(m.result.Warnings, msg.warnings...)
-	m.result.Stats.Errors += int64(len(msg.warnings))
-	m.applyFilter()
+	m.deleteWarnings = append(m.deleteWarnings, msg.warnings...)
+	m.rebuildGroupsKeepingSelection()
 	m.deleteNotice = fmt.Sprintf("Deleted %d flagged files.", len(msg.removed))
 	if msg.err != nil {
 		if errors.Is(msg.err, context.Canceled) {
@@ -199,6 +203,42 @@ func (m Model) updateDuplicateDeletion(msg duplicatesDeletedMsg) (tea.Model, tea
 		return m, nil
 	}
 	return m.finishDeleteAction()
+}
+
+// rebuildGroupsKeepingSelection refreshes the visible groups after files were
+// removed, keeping the selected group and file when they still exist.
+func (m *Model) rebuildGroupsKeepingSelection() {
+	previousGroup, previousFile := m.selectedGroup, m.detailOffset
+	var selectedHash [32]byte
+	selectedPath := ""
+	hasSelection := previousGroup >= 0 && previousGroup < len(m.groups)
+	if hasSelection {
+		group := m.groups[previousGroup]
+		selectedHash = group.Hash
+		if previousFile >= 0 && previousFile < len(group.Files) {
+			selectedPath = group.Files[previousFile].Path
+		}
+	}
+	m.applyFilter()
+	if len(m.groups) == 0 {
+		return
+	}
+	m.selectedGroup = min(max(0, previousGroup), len(m.groups)-1)
+	if hasSelection {
+		for index, group := range m.groups {
+			if group.Hash == selectedHash {
+				m.selectedGroup = index
+				m.detailOffset = min(max(0, previousFile), len(group.Files)-1)
+				for fileIndex, file := range group.Files {
+					if file.Path == selectedPath {
+						m.detailOffset = fileIndex
+						break
+					}
+				}
+				break
+			}
+		}
+	}
 }
 
 func (m Model) finishDeleteAction() (tea.Model, tea.Cmd) {

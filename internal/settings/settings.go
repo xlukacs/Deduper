@@ -35,6 +35,12 @@ func DefaultCleanupFolders() []string {
 	return append([]string(nil), defaultCleanupFolders...)
 }
 
+// ValidCleanupName reports whether name is a single directory name that cleanup
+// mode can match. Callers should trim surrounding whitespace first.
+func ValidCleanupName(name string) bool {
+	return name != "" && name != "." && name != ".." && !strings.ContainsAny(name, `/\\`)
+}
+
 // Store manages settings in the platform user configuration directory.
 type Store struct {
 	path string
@@ -145,7 +151,7 @@ func normalize(config Config) Config {
 		folders = make([]string, 0, len(config.CleanupFolders))
 		for _, folder := range config.CleanupFolders {
 			folder = strings.TrimSpace(folder)
-			if folder == "" || folder == "." || folder == ".." || strings.ContainsAny(folder, `/\\`) {
+			if !ValidCleanupName(folder) {
 				continue
 			}
 			if _, exists := seen[folder]; exists {

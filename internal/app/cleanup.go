@@ -54,8 +54,9 @@ func (m Model) launchCleanupScan(root string) (tea.Model, tea.Cmd) {
 	m.showWarnings = false
 
 	names := m.cleanupFolderNames()
+	options := m.scanOptions()
 	go func() {
-		result, err := scan.FindCleanupFolders(ctx, root, names, channelObserver{id: id, events: events})
+		result, err := scan.FindCleanupFolders(ctx, root, names, options, channelObserver{id: id, events: events})
 		select {
 		case events <- cleanupFinishedMsg{id: id, result: result, err: err}:
 		case <-ctx.Done():
@@ -147,7 +148,7 @@ func (m Model) updateCleanupResults(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if m.cleanupConfirm {
 		if key, ok := msg.(tea.KeyPressMsg); ok {
 			switch key.String() {
-			case "y", "enter":
+			case "y":
 				m.cleanupConfirm = false
 				return m.deleteCleanupFolders()
 			case "n", keyCancel:
@@ -203,9 +204,8 @@ func (m Model) updateCleanupResults(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 	}
-	var cmd tea.Cmd
-	m.spinner, cmd = m.spinner.Update(msg)
-	return m, cmd
+	// Spinner ticks are dropped while idle so the tick loop stops.
+	return m, nil
 }
 
 func (m Model) deleteCleanupFolders() (tea.Model, tea.Cmd) {
@@ -261,6 +261,7 @@ func (m Model) updateCleanupDeletion(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.status = "Cleanup failed: " + typed.err.Error()
 		return m, nil
 	}
+	attempted := len(m.cleanupResult.Folders)
 	removed := make(map[string]struct{}, len(typed.removed))
 	for _, path := range typed.removed {
 		removed[path] = struct{}{}
@@ -275,10 +276,12 @@ func (m Model) updateCleanupDeletion(msg tea.Msg) (tea.Model, tea.Cmd) {
 	m.cleanupResult.Warnings = append(m.cleanupResult.Warnings, typed.warnings...)
 	if errors.Is(typed.err, context.Canceled) {
 		m.cleanupNotice = fmt.Sprintf("Deletion stopped after removing %d folders. Remaining matches may be partially deleted; rescan before retrying.", len(typed.removed))
-	} else if len(typed.warnings) == 0 {
-		m.cleanupNotice = fmt.Sprintf("Deleted %d cleanup folders.", len(typed.removed))
+	} else if failed := attempted - len(typed.removed); failed > 0 {
+		m.cleanupNotice = fmt.Sprintf("Deleted %d folders; %d could not be removed. See warnings.", len(typed.removed), failed)
+	} else if len(typed.warnings) > 0 {
+		m.cleanupNotice = fmt.Sprintf("Deleted %d cleanup folders with %d warnings.", len(typed.removed), len(typed.warnings))
 	} else {
-		m.cleanupNotice = fmt.Sprintf("Deleted %d folders; %d could not be removed. See warnings.", len(typed.removed), len(typed.warnings))
+		m.cleanupNotice = fmt.Sprintf("Deleted %d cleanup folders.", len(typed.removed))
 	}
 	if m.cleanupSelected >= len(m.cleanupResult.Folders) {
 		m.cleanupSelected = max(0, len(m.cleanupResult.Folders)-1)
@@ -319,12 +322,12 @@ func (m Model) viewCleanupResults() string {
 		}
 	}
 	if m.cleanupConfirm {
-		body += "\n\n" + m.styles.errorText.Render(fmt.Sprintf("Delete all %d matching folders and everything inside them? Press y to confirm or Esc to cancel.", len(m.cleanupResult.Folders)))
+		body += "\n\n" + m.styles.errorText.Render(fmt.Sprintf("Delete all %d matching folders and everything inside them? Press y to confirm, or n/Esc to cancel.", len(m.cleanupResult.Folders)))
 	}
 	body += m.errorLine()
 	help := "↑/↓ navigate  •  d delete all  •  m edit folder names  •  r rescan  •  w warnings  •  n new root  •  q quit"
 	if m.cleanupConfirm {
-		help = "y confirm delete  •  esc cancel"
+		help = "y confirm delete  •  n/esc cancel"
 	} else if m.cleanupBusy {
 		help = "esc cancel deletion  •  ctrl+c quit"
 	}
@@ -374,12 +377,18 @@ func (m Model) openCleanupSettings(returnTo screen) (tea.Model, tea.Cmd) {
 	m.cleanupSettingsIndex = 0
 	m.cleanupEditing = false
 	m.cleanupEditingIndex = -1
+	m.cleanupRulesChanged = false
 	m.settingInput.Blur()
 	return m, nil
 }
 
 func (m Model) closeCleanupSettings() (tea.Model, tea.Cmd) {
 	m.screen = m.cleanupSettingsReturn
+	if m.screen == screenCleanupResults && m.cleanupRulesChanged {
+		// The previous matches no longer reflect the folder names, so they must
+		// not remain deletable. Search again with the new names.
+		return m.launchCleanupScan(m.cleanupResult.Root)
+	}
 	if m.screen == screenStart {
 		m.focus = focusInput
 		return m, m.pathInput.Focus()
@@ -441,9 +450,7 @@ func (m Model) updateCleanupSettings(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.cleanupSettingsIndex--
 				}
 				m.saveSettings()
-				if m.cleanupSettingsReturn == screenCleanupResults {
-					m.cleanupNotice = "Folder rules changed. Press r to search again."
-				}
+				m.cleanupRulesChanged = true
 			}
 			return m, nil
 		}
@@ -453,7 +460,7 @@ func (m Model) updateCleanupSettings(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 func (m *Model) commitCleanupFolder() bool {
 	value := strings.TrimSpace(m.settingInput.Value())
-	if value == "" || value == "." || value == ".." || strings.ContainsAny(value, `/\\`) {
+	if !settings.ValidCleanupName(value) {
 		m.status = "Enter a single folder name, without a path."
 		return false
 	}
@@ -471,9 +478,7 @@ func (m *Model) commitCleanupFolder() bool {
 	}
 	m.status = ""
 	m.saveSettings()
-	if m.cleanupSettingsReturn == screenCleanupResults {
-		m.cleanupNotice = "Folder rules changed. Press r to search again."
-	}
+	m.cleanupRulesChanged = true
 	return true
 }
 

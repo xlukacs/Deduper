@@ -66,6 +66,7 @@ func (m Model) launchScan(root string) (tea.Model, tea.Cmd) {
 	m.deleteReviewOffset = 0
 	m.deleteAfter = ""
 	m.deleteNotice = ""
+	m.deleteWarnings = nil
 	m.filtering = false
 	m.filterInput.SetValue("")
 	m.filterInput.Blur()

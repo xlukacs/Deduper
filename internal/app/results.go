@@ -344,14 +344,26 @@ func (m Model) detailView() string {
 }
 
 func (m Model) warningView() string {
-	if len(m.result.Warnings) == 0 {
+	if len(m.result.Warnings) == 0 && len(m.deleteWarnings) == 0 {
 		return m.styles.panel.Render("Warnings\n\nNo warnings occurred.")
 	}
-	lines := make([]string, 0, len(m.result.Warnings)+1)
-	lines = append(lines, fmt.Sprintf("Warnings (%d)", len(m.result.Warnings)), "")
-	limit := min(len(m.result.Warnings), max(3, m.height-12))
-	for _, warning := range m.result.Warnings[:limit] {
-		lines = append(lines, fmt.Sprintf("%s: %v", warning.Path, warning.Err))
+	var lines []string
+	remaining := max(3, m.height-12)
+	addSection := func(title string, warnings []scan.Warning) {
+		if len(warnings) == 0 || remaining <= 0 {
+			return
+		}
+		if len(lines) > 0 {
+			lines = append(lines, "")
+		}
+		lines = append(lines, fmt.Sprintf("%s (%d)", title, len(warnings)), "")
+		shown := min(len(warnings), remaining)
+		for _, warning := range warnings[:shown] {
+			lines = append(lines, fmt.Sprintf("%s: %v", warning.Path, warning.Err))
+		}
+		remaining -= shown
 	}
+	addSection("Deletion problems", m.deleteWarnings)
+	addSection("Scan warnings", m.result.Warnings)
 	return m.styles.panel.Render(strings.Join(lines, "\n"))
 }

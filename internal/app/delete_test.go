@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/xlukacs/Deduper/internal/scan"
@@ -173,7 +174,7 @@ func TestResultsDeletionFailuresRetainMarksAndIgnoreStaleMessages(t *testing.T) 
 	}
 	updated, cmd := m.Update(duplicatesDeletedMsg{id: 7, warnings: []scan.Warning{{Path: "/tmp/root/alpha", Err: errors.New("changed")}}})
 	m = updated.(Model)
-	if m.deleteBusy || len(m.deleteMarked) != 1 || len(m.result.Warnings) != 1 || m.deleteAfter != "" || cmd != nil {
+	if m.deleteBusy || len(m.deleteMarked) != 1 || len(m.deleteWarnings) != 1 || len(m.result.Warnings) != 0 || m.deleteAfter != "" || cmd != nil {
 		t.Fatal("failure must preserve marks and stop pending exit")
 	}
 	if !strings.Contains(m.deleteNotice, "could not be deleted") {
@@ -257,5 +258,38 @@ func TestResultsSuccessfulDeletionContinuesPendingQuit(t *testing.T) {
 	}
 	if _, ok := cmd().(tea.QuitMsg); !ok {
 		t.Fatal("successful deletion did not quit")
+	}
+}
+
+func TestResultsDeletionKeepsSelectionAndScanErrors(t *testing.T) {
+	m := New()
+	m.screen = screenResults
+	m.groupSort = sortPath
+	m.result = scan.Result{Root: "/tmp/root", Groups: []scan.DuplicateGroup{
+		sortGroup("/tmp/root/a", 4, 3, time.Unix(0, 0)),
+		sortGroup("/tmp/root/b", 4, 3, time.Unix(0, 0)),
+		sortGroup("/tmp/root/c", 4, 3, time.Unix(0, 0)),
+	}}
+	m.applyFilter()
+	m.selectedGroup, m.detailOffset = 2, 2
+	m.deleteMarked = map[string]bool{"/tmp/root/a-0": true, "/tmp/root/c-0": true}
+	m.deleteBusy = true
+	m.scanID = 3
+	updated, _ := m.Update(duplicatesDeletedMsg{
+		id:       3,
+		removed:  []string{"/tmp/root/a-0"},
+		warnings: []scan.Warning{{Path: "/tmp/root/c-0", Err: errors.New("changed")}},
+	})
+	m = updated.(Model)
+	group := m.groups[m.selectedGroup]
+	if group.Files[m.detailOffset].Path != "/tmp/root/c-2" {
+		t.Fatalf("selection moved to group %d file %d", m.selectedGroup, m.detailOffset)
+	}
+	if m.result.Stats.Errors != 0 || len(m.result.Warnings) != 0 || len(m.deleteWarnings) != 1 {
+		t.Fatal("deletion problems must be kept apart from scan errors")
+	}
+	m.showWarnings = true
+	if view := m.warningView(); !strings.Contains(view, "Deletion problems (1)") {
+		t.Fatalf("deletion problems missing from warnings view:\n%s", view)
 	}
 }

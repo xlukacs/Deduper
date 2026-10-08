@@ -98,7 +98,13 @@ names only and skips the contents of a match. The results screen lists each
 matching path; press `d`, then `y`, to remove every listed folder and its
 contents. Choose **Edit cleanup folder names** on the mode screen, or press `m`
 in cleanup results, to add, rename, or remove names. Rules match directory
-names exactly at any depth and are saved in settings.
+names exactly at any depth and are saved in settings. Changing the names from
+cleanup results starts a new search, so only folders that match the current
+names can be deleted.
+
+Cleanup search respects your folder exclusions: it never searches or matches an
+excluded folder. With hidden-folder exclusion on, it still matches hidden names
+you list (such as `.venv`) but does not search inside other hidden folders.
 
 Cleanup search shows the current directory, how many directories it has checked,
 and how many matches it has found. Deletion shows the current path, completed
@@ -110,8 +116,8 @@ Press `o` in the interactive application to open scan settings. There you can
 toggle hidden-folder exclusions (such as `.git`, `.turbo`, and `.ssh`) and add
 or remove folder exclusions. A bare folder name applies anywhere below the scan
 root; a path with `/` applies relative to the scan root. Settings are saved for
-future interactive and plain-text scans. `node_modules` and `venv` remain
-excluded by default.
+future interactive and plain-text scans. Duplicate scans also always skip
+`node_modules` and `venv`; cleanup mode does not apply that built-in rule.
 
 ### Hash workers
 

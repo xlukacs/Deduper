@@ -75,6 +75,7 @@ type Model struct {
 	cleanupEditing         bool
 	cleanupEditingIndex    int
 	cleanupSettingsReturn  screen
+	cleanupRulesChanged    bool
 	cleanupResult          scan.CleanupResult
 	cleanupSelected        int
 	cleanupConfirm         bool
@@ -105,6 +106,7 @@ type Model struct {
 	deleteReviewOffset int
 	deleteAfter        string
 	deleteNotice       string
+	deleteWarnings     []scan.Warning
 
 	styles styles
 }
