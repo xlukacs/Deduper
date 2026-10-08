@@ -20,7 +20,7 @@ Build an Ubuntu/Debian package for the current machine:
 
 ```sh
 ./scripts/build-deb.sh
-sudo apt install ./dist/deduper_0.2.1_amd64.deb
+sudo apt install ./dist/deduper_0.3.0_amd64.deb
 ```
 
 The package installs the `deduper` command in `/usr/bin`. Go is only required
