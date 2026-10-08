@@ -1,7 +1,7 @@
 {
   "name": "@madrent/deduper",
   "version": "0.2.1",
-  "description": "Content-based duplicate file finder",
+  "description": "Interactive duplicate file finder and folder cleanup tool",
   "license": "MIT",
   "author": "Bence Mark Lukacs",
   "homepage": "https://github.com/xlukacs/Deduper#readme",
@@ -31,6 +31,7 @@
   "keywords": [
     "duplicate-files",
     "deduplication",
+    "folder-cleanup",
     "cli",
     "sha256"
   ],

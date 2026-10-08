@@ -20,9 +20,13 @@ type screen int
 
 const (
 	screenStart screen = iota
+	screenModeSelect
 	screenScanning
 	screenResults
 	screenSettings
+	screenCleanupSettings
+	screenCleanupScanning
+	screenCleanupResults
 )
 
 type focus int
@@ -58,13 +62,27 @@ type Model struct {
 	filtering       bool
 	recent          []string
 	recentIndex     int
+	selectedRoot    string
+	modeSelected    int
 	history         *history.Store
 	settings        settings.Config
 	settingsStore   *settings.Store
 	settingsIndex   int
 	editingSettings bool
 	settingsReturn  screen
-	status          string
+
+	cleanupSettingsIndex   int
+	cleanupEditing         bool
+	cleanupEditingIndex    int
+	cleanupSettingsReturn  screen
+	cleanupResult          scan.CleanupResult
+	cleanupSelected        int
+	cleanupConfirm         bool
+	cleanupBusy            bool
+	cleanupCancelRequested bool
+	cleanupDeleteProgress  scan.CleanupDeleteProgress
+	cleanupNotice          string
+	status                 string
 
 	spinner      spinner.Model
 	progress     progress.Model
@@ -75,12 +93,18 @@ type Model struct {
 	scanID       int64
 	events       <-chan tea.Msg
 
-	result        scan.Result
-	groups        []scan.DuplicateGroup
-	selectedGroup int
-	detailOffset  int
-	showWarnings  bool
-	groupSort     groupSort
+	result             scan.Result
+	groups             []scan.DuplicateGroup
+	selectedGroup      int
+	detailOffset       int
+	showWarnings       bool
+	groupSort          groupSort
+	deleteMarked       map[string]bool
+	deleteConfirm      bool
+	deleteBusy         bool
+	deleteReviewOffset int
+	deleteAfter        string
+	deleteNotice       string
 
 	styles styles
 }
@@ -111,6 +135,7 @@ func New() Model {
 		pathInput:    pathInput,
 		filterInput:  filterInput,
 		settingInput: settingInput,
+		settings:     settings.Config{CleanupFolders: settings.DefaultCleanupFolders()},
 		spinner:      spinner.New(spinner.WithSpinner(spinner.Dot)),
 		progress:     progress.New(progress.WithDefaultBlend()),
 		styles:       newStyles(),
@@ -168,12 +193,20 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch m.screen {
 	case screenStart:
 		return m.updateStart(msg)
+	case screenModeSelect:
+		return m.updateModeSelect(msg)
 	case screenScanning:
 		return m.updateScanning(msg)
 	case screenResults:
 		return m.updateResults(msg)
 	case screenSettings:
 		return m.updateSettings(msg)
+	case screenCleanupSettings:
+		return m.updateCleanupSettings(msg)
+	case screenCleanupScanning:
+		return m.updateCleanupScanning(msg)
+	case screenCleanupResults:
+		return m.updateCleanupResults(msg)
 	default:
 		return m, nil
 	}
@@ -184,12 +217,20 @@ func (m Model) View() tea.View {
 	switch m.screen {
 	case screenStart:
 		content = m.viewStart()
+	case screenModeSelect:
+		content = m.viewModeSelect()
 	case screenScanning:
 		content = m.viewScanning()
 	case screenResults:
 		content = m.viewResults()
 	case screenSettings:
 		content = m.viewSettings()
+	case screenCleanupSettings:
+		content = m.viewCleanupSettings()
+	case screenCleanupScanning:
+		content = m.viewCleanupScanning()
+	case screenCleanupResults:
+		content = m.viewCleanupResults()
 	}
 	view := tea.NewView(content)
 	view.AltScreen = true
@@ -201,11 +242,18 @@ func (m *Model) resize() {
 	usable := max(20, m.width-8)
 	m.pathInput.SetWidth(min(72, usable))
 	m.filterInput.SetWidth(min(60, usable))
+	m.settingInput.SetWidth(min(60, usable))
 	m.progress.SetWidth(min(72, usable))
 }
 
 func (m Model) chrome(body, help string) string {
-	header := m.styles.title.Render("DEDUPER") + "  " + m.styles.subtitle.Render("content-based duplicate finder")
+	subtitle := "content-based duplicate finder"
+	if m.screen == screenCleanupSettings || m.screen == screenCleanupScanning || m.screen == screenCleanupResults {
+		subtitle = "folder cleanup"
+	} else if m.screen == screenModeSelect {
+		subtitle = "choose a mode"
+	}
+	header := m.styles.title.Render("DEDUPER") + "  " + m.styles.subtitle.Render(subtitle)
 	content := header + "\n\n" + body
 	if m.height > 0 {
 		lines := strings.Count(content, "\n") + strings.Count(help, "\n") + 2

@@ -15,12 +15,14 @@ const (
 
 // Progress is a point-in-time snapshot of scan activity.
 type Progress struct {
-	Phase          Phase
-	CurrentPath    string
-	FilesCompleted int64
-	FilesTotal     int64
-	BytesCompleted int64
-	BytesTotal     int64
+	Phase              Phase
+	CurrentPath        string
+	DirectoriesVisited int64
+	FilesCompleted     int64
+	FilesTotal         int64
+	BytesCompleted     int64
+	BytesTotal         int64
+	MatchesFound       int64
 }
 
 // Warning describes a recoverable filesystem problem.
@@ -63,6 +65,31 @@ type Result struct {
 	Warnings   []Warning
 	StartedAt  time.Time
 	FinishedAt time.Time
+}
+
+// CleanupFolder describes a matching directory. Its contents are not inspected
+// during cleanup search.
+type CleanupFolder struct {
+	Name string
+	Path string
+}
+
+// CleanupResult is the read-only outcome of a cleanup folder search.
+type CleanupResult struct {
+	Root       string
+	Names      []string
+	Folders    []CleanupFolder
+	Warnings   []Warning
+	StartedAt  time.Time
+	FinishedAt time.Time
+}
+
+// CleanupDeleteProgress reports recursive deletion activity.
+type CleanupDeleteProgress struct {
+	CurrentPath      string
+	FoldersCompleted int
+	FoldersTotal     int
+	EntriesRemoved   int64
 }
 
 // Observer receives synchronous scan events. Implementations must return quickly.

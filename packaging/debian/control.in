@@ -6,7 +6,8 @@ Architecture: @ARCHITECTURE@
 Installed-Size: @INSTALLED_SIZE@
 Maintainer: Bence Mark Lukacs <43961338+xlukacs@users.noreply.github.com>
 Homepage: https://github.com/xlukacs/Deduper
-Description: content-based duplicate file finder
+Description: interactive duplicate finder and folder cleanup tool
  Deduper recursively scans a directory, hashes candidate files with SHA-256,
  collapses hard-linked paths, and reports duplicate files and reclaimable space.
- It provides both an interactive terminal interface and a plain-text scan mode.
+ Its terminal interface also finds configured folders and removes them after
+ confirmation. A plain-text duplicate scan mode is available as well.

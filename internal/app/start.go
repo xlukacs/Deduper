@@ -22,12 +22,7 @@ func (m Model) updateStart(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return m, nil
 		case "enter":
-			path := strings.TrimSpace(m.pathInput.Value())
-			if m.focus == focusRecent && len(m.recent) > 0 {
-				path = m.recent[m.recentIndex]
-				m.pathInput.SetValue(path)
-			}
-			return m.beginScan(path)
+			return m.selectRoot(m.selectedStartPath())
 		case keyMoveUp, keyMoveUpAlt:
 			if m.focus == focusRecent {
 				if m.recentIndex > 0 {
@@ -63,7 +58,7 @@ func (m Model) updateStart(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-func (m Model) beginScan(path string) (tea.Model, tea.Cmd) {
+func (m Model) selectRoot(path string) (tea.Model, tea.Cmd) {
 	abs, err := validRoot(path)
 	if err != nil {
 		m.status = err.Error()
@@ -77,7 +72,19 @@ func (m Model) beginScan(path string) (tea.Model, tea.Cmd) {
 			m.status = "Could not save history: " + saveErr.Error()
 		}
 	}
-	return m.launchScan(abs)
+	m.selectedRoot = abs
+	m.modeSelected = 0
+	m.screen = screenModeSelect
+	return m, nil
+}
+
+func (m *Model) selectedStartPath() string {
+	path := strings.TrimSpace(m.pathInput.Value())
+	if m.focus == focusRecent && len(m.recent) > 0 {
+		path = m.recent[m.recentIndex]
+		m.pathInput.SetValue(path)
+	}
+	return path
 }
 
 func validRoot(path string) (string, error) {
@@ -106,7 +113,7 @@ func (m Model) viewStart() string {
 	if m.focus == focusInput {
 		inputStyle = m.styles.focusedPanel
 	}
-	body := "Choose a folder. Deduper reads files but never changes them.\n\n"
+	body := "Choose a folder, then press Enter to select what Deduper should do with it.\n\n"
 	body += inputStyle.Render(m.pathInput.View())
 	if len(m.recent) > 0 {
 		body += "\n\n" + m.styles.subtitle.Render("Recent folders") + "\n"
@@ -121,5 +128,5 @@ func (m Model) viewStart() string {
 		}
 	}
 	body += m.errorLine()
-	return m.chrome(body, "enter scan  •  tab switch focus  •  ↑/↓ choose recent  •  o settings  •  ctrl+c quit")
+	return m.chrome(body, "enter choose mode  •  tab switch focus  •  ↑/↓ choose recent folder  •  o scan settings  •  ctrl+c quit")
 }
