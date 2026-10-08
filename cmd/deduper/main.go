@@ -16,7 +16,7 @@ import (
 )
 
 // version can be replaced by release builds with -X main.version.
-var version = "0.2.1"
+var version = "0.3.0"
 
 func main() {
 	os.Exit(run(os.Args[1:], os.Stdout, os.Stderr))

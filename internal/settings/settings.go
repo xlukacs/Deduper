@@ -16,7 +16,29 @@ const fileName = "settings.json"
 type Config struct {
 	IgnoreHiddenFolders bool     `json:"ignore_hidden_folders"`
 	ExcludedFolders     []string `json:"excluded_folders"`
+	CleanupFolders      []string `json:"cleanup_folders"`
 	Workers             int      `json:"workers"`
+}
+
+var defaultCleanupFolders = []string{
+	"venv",
+	".venv",
+	"node_modules",
+	"__pycache__",
+	".pytest_cache",
+	".mypy_cache",
+}
+
+// DefaultCleanupFolders returns the built-in exact directory names targeted by
+// cleanup mode.
+func DefaultCleanupFolders() []string {
+	return append([]string(nil), defaultCleanupFolders...)
+}
+
+// ValidCleanupName reports whether name is a single directory name that cleanup
+// mode can match. Callers should trim surrounding whitespace first.
+func ValidCleanupName(name string) bool {
+	return name != "" && name != "." && name != ".." && !strings.ContainsAny(name, `/\\`)
 }
 
 // Store manages settings in the platform user configuration directory.
@@ -42,7 +64,7 @@ func NewAt(path string) *Store {
 func (s *Store) Load() (Config, error) {
 	data, err := os.ReadFile(s.path)
 	if errors.Is(err, os.ErrNotExist) {
-		return Config{}, nil
+		return Config{CleanupFolders: DefaultCleanupFolders()}, nil
 	}
 	if err != nil {
 		return Config{}, fmt.Errorf("read settings: %w", err)
@@ -50,6 +72,15 @@ func (s *Store) Load() (Config, error) {
 	var config Config
 	if err := json.Unmarshal(data, &config); err != nil {
 		return Config{}, fmt.Errorf("decode settings: %w", err)
+	}
+	// Add the defaults for pre-cleanup settings files. An explicit empty list
+	// remains empty so users can turn off every cleanup rule.
+	var saved map[string]json.RawMessage
+	if err := json.Unmarshal(data, &saved); err != nil {
+		return Config{}, fmt.Errorf("decode settings: %w", err)
+	}
+	if _, exists := saved["cleanup_folders"]; !exists {
+		config.CleanupFolders = DefaultCleanupFolders()
 	}
 	return normalize(config), nil
 }
@@ -115,5 +146,21 @@ func normalize(config Config) Config {
 		folders = append(folders, folder)
 	}
 	config.ExcludedFolders = folders
+	if config.CleanupFolders != nil {
+		seen = make(map[string]struct{}, len(config.CleanupFolders))
+		folders = make([]string, 0, len(config.CleanupFolders))
+		for _, folder := range config.CleanupFolders {
+			folder = strings.TrimSpace(folder)
+			if !ValidCleanupName(folder) {
+				continue
+			}
+			if _, exists := seen[folder]; exists {
+				continue
+			}
+			seen[folder] = struct{}{}
+			folders = append(folders, folder)
+		}
+		config.CleanupFolders = folders
+	}
 	return config
 }

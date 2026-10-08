@@ -256,12 +256,19 @@ type ignoreRules struct {
 }
 
 func newIgnoreRules(options Options) ignoreRules {
+	return newExclusionRules(options, defaultIgnoredDirNames)
+}
+
+// newExclusionRules builds rules from the user's folder settings plus any
+// built-in names. Cleanup search passes no built-in names because it targets
+// folders such as node_modules that duplicate scans skip.
+func newExclusionRules(options Options, builtinNames []string) ignoreRules {
 	rules := ignoreRules{
-		names:              make(map[string]struct{}, len(defaultIgnoredDirNames)),
+		names:              make(map[string]struct{}, len(builtinNames)),
 		paths:              make(map[string]struct{}),
 		ignoreHiddenFolder: options.IgnoreHiddenFolders,
 	}
-	for _, name := range defaultIgnoredDirNames {
+	for _, name := range builtinNames {
 		rules.names[name] = struct{}{}
 	}
 	for _, rawEntry := range options.ExcludedFolders {
@@ -283,9 +290,15 @@ func newIgnoreRules(options Options) ignoreRules {
 }
 
 func (rules ignoreRules) matches(relative, name string) bool {
-	if rules.ignoreHiddenFolder && strings.HasPrefix(name, ".") {
-		return true
-	}
+	return rules.hidden(name) || rules.excluded(relative, name)
+}
+
+func (rules ignoreRules) hidden(name string) bool {
+	return rules.ignoreHiddenFolder && strings.HasPrefix(name, ".")
+}
+
+// excluded reports whether a folder matches an excluded name or path.
+func (rules ignoreRules) excluded(relative, name string) bool {
 	if _, ignored := rules.names[name]; ignored {
 		return true
 	}

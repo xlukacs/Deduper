@@ -60,6 +60,16 @@ func (m Model) launchScan(root string) (tea.Model, tea.Cmd) {
 	m.latest = scan.Progress{Phase: scan.PhaseDiscovering, CurrentPath: root}
 	m.scanWarnings = 0
 	m.result = scan.Result{}
+	m.deleteMarked = nil
+	m.deleteConfirm = false
+	m.deleteBusy = false
+	m.deleteReviewOffset = 0
+	m.deleteAfter = ""
+	m.deleteNotice = ""
+	m.deleteWarnings = nil
+	m.filtering = false
+	m.filterInput.SetValue("")
+	m.filterInput.Blur()
 	m.showWarnings = false
 
 	go func() {

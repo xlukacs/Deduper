@@ -14,6 +14,12 @@ import (
 )
 
 func (m Model) updateResults(msg tea.Msg) (tea.Model, tea.Cmd) {
+	if typed, ok := msg.(duplicatesDeletedMsg); ok {
+		return m.updateDuplicateDeletion(typed)
+	}
+	if m.deleteConfirm || m.deleteBusy {
+		return m.updateDeleteReview(msg)
+	}
 	if m.filtering {
 		if key, ok := msg.(tea.KeyPressMsg); ok {
 			switch key.String() {
@@ -34,7 +40,30 @@ func (m Model) updateResults(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 
 	if key, ok := msg.(tea.KeyPressMsg); ok {
+		if len(m.deleteMarked) > 0 {
+			switch key.String() {
+			case keyQuit, keyCancel, keyNewScan, keyRescan:
+				m.deleteAfter = key.String()
+				m.deleteConfirm = true
+				m.deleteReviewOffset = 0
+				return m, nil
+			}
+		}
 		switch key.String() {
+		case keyDeleteMark:
+			m.toggleDeleteMark()
+			return m, nil
+		case keyDeleteReview:
+			if len(m.deleteMarked) > 0 {
+				m.deleteConfirm = true
+				m.deleteAfter = ""
+				m.deleteReviewOffset = 0
+			}
+			return m, nil
+		case keyDeleteClear:
+			m.deleteMarked = nil
+			m.deleteNotice = "Deletion marks cleared."
+			return m, nil
 		case keyQuit:
 			return m, tea.Quit
 		case keyFilter:
@@ -184,6 +213,9 @@ func groupPath(group scan.DuplicateGroup) string {
 }
 
 func (m Model) viewResults() string {
+	if m.deleteConfirm {
+		return m.viewDeleteReview()
+	}
 	duration := m.result.FinishedAt.Sub(m.result.StartedAt).Round(time.Millisecond)
 	var reclaimable int64
 	var copies int
@@ -211,7 +243,17 @@ func (m Model) viewResults() string {
 	if m.filtering || m.filterInput.Value() != "" {
 		body = m.filterInput.View() + "\n\n" + body
 	}
-	help := "↑/↓ or j/k navigate  •  tab switch pane  •  / filter  •  s sort  •  o settings  •  r rescan  •  n new  •  w warnings  •  q quit"
+	if len(m.deleteMarked) > 0 {
+		body += fmt.Sprintf("\n\n%d files flagged for deletion · %s", len(m.deleteMarked), report.Bytes(m.markedBytes()))
+	}
+	if m.deleteNotice != "" {
+		body += "\n\n" + m.styles.accent.Render(m.deleteNotice)
+	}
+	help := "↑/↓ or j/k navigate  •  tab switch pane  •  d mark/unmark file  •  enter review deletion  •  u clear marks\n/ filter  •  s sort  •  o settings  •  r rescan  •  n new  •  w warnings  •  q quit"
+	if m.deleteBusy {
+		body += "\n\n" + m.spinner.View() + " Verifying and deleting flagged files..."
+		help = "esc stop deletion  •  ctrl+c quit"
+	}
 	return m.chrome(summary+"\n\n"+body, help)
 }
 
@@ -237,6 +279,15 @@ func (m Model) groupView() string {
 			} else {
 				line = fmt.Sprintf("%d files · %s · updated %s", len(group.Files), report.Bytes(group.Size), updated.Format("2006-01-02"))
 			}
+		}
+		marked := 0
+		for _, file := range group.Files {
+			if m.deleteMarked[file.Path] {
+				marked++
+			}
+		}
+		if marked > 0 {
+			line += fmt.Sprintf(" · %d flagged", marked)
 		}
 		if i == m.selectedGroup {
 			line = "> " + m.styles.selected.Render(line)
@@ -267,9 +318,21 @@ func (m Model) detailView() string {
 		group := m.groups[m.selectedGroup]
 		lines := []string{fmt.Sprintf("SHA-256: %x", group.Hash), ""}
 		visible := max(2, m.height/3)
-		end := min(len(group.Files), m.detailOffset+visible)
-		for _, file := range group.Files[m.detailOffset:end] {
-			lines = append(lines, file.Path)
+		start := max(0, m.detailOffset-visible+1)
+		end := min(len(group.Files), start+visible)
+		for i := start; i < end; i++ {
+			file := group.Files[i]
+			marker := "[ ] "
+			if m.deleteMarked[file.Path] {
+				marker = "[DELETE] "
+			}
+			line := marker + file.Path
+			if i == m.detailOffset && m.focus == focusDetails {
+				line = "> " + m.styles.selected.Render(line)
+			} else {
+				line = "  " + line
+			}
+			lines = append(lines, line)
 		}
 		content = strings.Join(lines, "\n")
 	}
@@ -281,14 +344,26 @@ func (m Model) detailView() string {
 }
 
 func (m Model) warningView() string {
-	if len(m.result.Warnings) == 0 {
+	if len(m.result.Warnings) == 0 && len(m.deleteWarnings) == 0 {
 		return m.styles.panel.Render("Warnings\n\nNo warnings occurred.")
 	}
-	lines := make([]string, 0, len(m.result.Warnings)+1)
-	lines = append(lines, fmt.Sprintf("Warnings (%d)", len(m.result.Warnings)), "")
-	limit := min(len(m.result.Warnings), max(3, m.height-12))
-	for _, warning := range m.result.Warnings[:limit] {
-		lines = append(lines, fmt.Sprintf("%s: %v", warning.Path, warning.Err))
+	var lines []string
+	remaining := max(3, m.height-12)
+	addSection := func(title string, warnings []scan.Warning) {
+		if len(warnings) == 0 || remaining <= 0 {
+			return
+		}
+		if len(lines) > 0 {
+			lines = append(lines, "")
+		}
+		lines = append(lines, fmt.Sprintf("%s (%d)", title, len(warnings)), "")
+		shown := min(len(warnings), remaining)
+		for _, warning := range warnings[:shown] {
+			lines = append(lines, fmt.Sprintf("%s: %v", warning.Path, warning.Err))
+		}
+		remaining -= shown
 	}
+	addSection("Deletion problems", m.deleteWarnings)
+	addSection("Scan warnings", m.result.Warnings)
 	return m.styles.panel.Render(strings.Join(lines, "\n"))
 }
